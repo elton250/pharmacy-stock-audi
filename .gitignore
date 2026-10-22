@@ -1,0 +1,61 @@
+# --- Secrets: never commit ---
+# Environment files are ignored. backend/env.example is the committed,
+# placeholder-only template and is explicitly kept trackable.
+.env
+.env.*
+!backend/env.example
+*.pem
+*.key
+*.p12
+
+# --- Database dumps and backup/drill evidence ---
+backups/
+*.dump
+*.sql
+*.sqlite
+*.sqlite3
+*.db
+
+# --- Runtime state (logs, capture images, postgres socket/log) ---
+runtime/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.venv/
+.venv-*/
+venv/
+ENV/
+
+# --- Node / Vite ---
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.tsbuildinfo
+*.local
+
+# --- Logs ---
+*.log
+
+# --- Editors / OS ---
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.sw?
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# --- Local scratch copies ---
+*.bak
+*.orig
+*.rej

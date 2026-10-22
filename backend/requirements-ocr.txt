@@ -1,0 +1,19 @@
+# Optional dependencies for the vision-assisted identification (Phase 2A).
+#
+# They are NOT part of the default installation: without them the backend
+# keeps running, but the camera upload answers with
+#   503 image_support_unavailable
+# and the manual entry stays the only way to identify a medicine.
+#
+#   venv/bin/pip install -r requirements-ocr.txt
+#
+# Pillow  -> image validation, EXIF removal and re-encoding of the photo.
+# Pillow is imported lazily, so the module works without the package.
+#
+# Tesseract is not a Python package: install the system package (Debian/Ubuntu)
+#   apt-get install tesseract-ocr tesseract-ocr-eng
+# and point the backend at it with the environment variables
+#   OCR_COMMAND=/usr/bin/tesseract
+#   OCR_TESSDATA_DIR=/usr/share/tesseract-ocr/5/tessdata
+# A root-free installation in ~/.local/opt/tesseract-<version> works as well.
+Pillow==12.1.0
