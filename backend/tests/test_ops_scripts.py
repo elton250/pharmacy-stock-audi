@@ -78,7 +78,9 @@ def test_backup_script_uses_a_temporary_file_and_validates():
     body = BACKUP_SCRIPT.read_text()
     # the 0-byte failure mode must be structurally impossible
     assert "--file=\"$TMPFILE\"" in body, "pg_dump must write to a temporary file"
-    assert "mv -f \"$TMPFILE\" \"$TARGET\"" in body, "the dump must be published atomically"
+    assert 'ln "$TMPFILE" "$candidate"' in body, "the dump must be published with an atomic no-clobber link"
+    assert "TARGET_PUBLISHED=1" in body, "published dump ownership must be tracked for cleanup"
+    assert 'mv -f "$TMPFILE" "$TARGET"' not in body, "publication must not overwrite an existing dump"
     assert "pg_dump failed" in body and "EMPTY file" in body
     assert "pg_restore --list" in body
     assert "stat -c %s" in body, "the dump size must be checked"
@@ -203,7 +205,8 @@ def test_restore_drill_restores_verifies_and_cleans_up(tmp_path):
 
     combined = result.stdout + result.stderr
     assert result.returncode == 0, combined
-    assert "RESTORE DRILL PASSED" in combined
+    assert "RESTORE VERIFICATION PASSED" in combined
+    assert "source data not queried" in combined
     # the disposable database must be gone again
     assert after == before, f"the drill database was not cleaned up: {after - before}"
     assert not any(db.startswith("pharmacy_restore_drill_") for db in after)

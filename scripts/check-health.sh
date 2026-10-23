@@ -51,6 +51,40 @@ else
   check "Frontend page (HTTP $frontend_code)" 1
 fi
 
+# Nightly backup freshness (status written by scripts/nightly-backup.sh).
+BACKUP_NIGHTLY_DIR="${PHARMACY_NIGHTLY_DIR:-$ROOT_DIR/backups/nightly}"
+BACKUP_STATUS_DIR="${PHARMACY_BACKUP_STATUS_DIR:-$BACKUP_NIGHTLY_DIR/status}"
+BACKUP_SUCCESS="$BACKUP_STATUS_DIR/last-success"
+BACKUP_FAILURE="$BACKUP_STATUS_DIR/last-failure"
+BACKUP_ALERT_FAILURE="$BACKUP_STATUS_DIR/last-alert-failure"
+file_epoch() { stat -c %Y "$1" 2>/dev/null || printf '0'; }
+now_epoch="$(date +%s)"
+success_epoch=0
+failure_epoch=0
+[[ -f "$BACKUP_SUCCESS" ]] && success_epoch="$(file_epoch "$BACKUP_SUCCESS")"
+[[ -f "$BACKUP_FAILURE" ]] && failure_epoch="$(file_epoch "$BACKUP_FAILURE")"
+if (( success_epoch > 0 )); then
+  age=$(( now_epoch - success_epoch ))
+  if (( failure_epoch > success_epoch )); then
+    check "Nightly backup (failure newer than last success)" 1
+  elif (( age <= 93600 )); then
+    check "Nightly backup (last success $(( age / 3600 ))h ago)" 0
+  else
+    check "Nightly backup (last success $(( age / 3600 ))h ago)" 1
+  fi
+elif (( failure_epoch > 0 )); then
+  check "Nightly backup (failure; no success record)" 1
+elif [[ -d "$BACKUP_STATUS_DIR" || -d "$BACKUP_NIGHTLY_DIR" ]]; then
+  check "Nightly backup (no success record)" 1
+else
+  printf '  [SKIP] Nightly backup (not configured)\n'
+fi
+if [[ -f "$BACKUP_ALERT_FAILURE" ]]; then
+  alert_epoch="$(file_epoch "$BACKUP_ALERT_FAILURE")"
+  alert_age=$(( now_epoch - alert_epoch ))
+  check "Nightly alert delivery (last failure $(( alert_age / 3600 ))h ago)" 1
+fi
+
 if (( bad > 0 )); then
   printf '\nRecent log tails\n'
   for f in "$RUNTIME_DIR/postgres.log" "$LOG_DIR/backend.log" "$LOG_DIR/frontend.log"; do

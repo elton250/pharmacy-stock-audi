@@ -1,0 +1,22 @@
+# Nightly PostgreSQL backup + weekly restore verification.
+#
+# NOT INSTALLED by the repository. Installation is a separate, explicitly
+# approved step:
+#
+#   crontab deploy/cron/pharmacy-backup.cron
+#
+# Check before installing:  crontab -l
+# Roll back with:           crontab -r   (or restore a saved `crontab -l` copy)
+#
+# Times are host local time. The database and backups currently live on the
+# same disk, so this protects against logical corruption and bad deploys, not
+# against disk loss. Copy dumps off-host separately.
+
+SHELL=/bin/bash
+PATH=/usr/local/bin:/usr/bin:/bin
+
+# 02:17 — validated nightly backup, status + private log.
+17 2 * * * cd /home/Salva508/Projects/pharmacy-stock-audit && mkdir -p backups/logs && scripts/nightly-backup.sh >> backups/logs/cron.log 2>&1
+
+# 03:17 Sunday — restore the newest nightly dump into a disposable database.
+17 3 * * 0 cd /home/Salva508/Projects/pharmacy-stock-audit && mkdir -p backups/logs && scripts/verify-backup.sh --latest-nightly >> backups/logs/verify-cron.log 2>&1

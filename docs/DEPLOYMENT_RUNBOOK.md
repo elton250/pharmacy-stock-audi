@@ -268,8 +268,18 @@ as a restore from backup (§ 5.2) from the start — do not improvise a
   before deploying.
 - The frontend is served by the Vite **dev** server; a production build
   (`npm run build`) is not served by anything yet.
-- No alerting: the health checks are manual, so the RTO in
-  `docs/BACKUP_RESTORE.md` assumes a human is watching.
+- Manual alerting: the health checks are manual, so the RTO in
+  `docs/BACKUP_RESTORE.md` assumes a human is watching. Nightly backup
+  automation, status files and the `PHARMACY_ALERT_CMD` hook are defined in
+  `scripts/nightly-backup.sh` and `deploy/cron/pharmacy-backup.cron`; cron
+  installation is a separate, explicitly approved step. Alert-command failures
+  are recorded in `status/last-alert-failure` without changing the backup
+  result, but no end-to-end delivery channel is verified. Backups and the
+  database still share one disk — copy dumps off-host.
+- R7 backup acceptance remains open for: off-host copy, verified alert
+  delivery, legacy dump validation, and source-vs-restore comparison. The last
+  is disabled by default and requires explicit approval; it now also detects
+  tables present only in the restored copy. See `docs/BACKUP_RESTORE.md` §6.
 
 ---
 

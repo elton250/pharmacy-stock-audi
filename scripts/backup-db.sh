@@ -17,7 +17,7 @@
 #   2. pg_dump's exit status is checked;
 #   3. the file must be non-empty;
 #   4. the archive is verified with `pg_restore --list` (custom format TOC);
-#   5. only then is the file moved into place (atomic rename);
+#   5. only then is the file published with an atomic no-clobber hard link;
 #   6. on any failure the temporary file is removed and the exit status is
 #      non-zero, so a caller cannot mistake it for a backup.
 #
@@ -108,12 +108,32 @@ umask 077
 mkdir -p "$BACKUP_DIR"
 chmod 700 "$BACKUP_DIR" 2>/dev/null || true
 
-STAMP="$(date -u +%Y%m%d_%H%M%S)"
-TARGET="$BACKUP_DIR/${DBNAME_}_${LABEL}_${STAMP}.dump"
-TMPFILE="$BACKUP_DIR/.incomplete_${DBNAME_}_${LABEL}_${STAMP}.dump"
+STAMP="${PHARMACY_BACKUP_STAMP:-$(date -u +%Y%m%d_%H%M%S)}"
+[[ "$STAMP" =~ ^[0-9]{8}_[0-9]{6}$ ]] || fail "invalid PHARMACY_BACKUP_STAMP: expected YYYYmmdd_HHMMSS"
+BASE="${DBNAME_}_${LABEL}_${STAMP}"
+TARGET=""
+SIDECAR=""
+MANIFEST=""
+TMPFILE=""
+SIDECAR_TMP=""
+MANIFEST_TMP=""
+TARGET_PUBLISHED=0
+SIDECAR_PUBLISHED=0
+MANIFEST_PUBLISHED=0
+KEEP_ARTIFACTS=0
 
-cleanup() { rm -f "$TMPFILE"; }
+cleanup() {
+  rm -f "$TMPFILE" "$SIDECAR_TMP" "$MANIFEST_TMP"
+  if (( KEEP_ARTIFACTS == 0 )); then
+    if (( TARGET_PUBLISHED == 1 )); then rm -f "$TARGET"; fi
+    if (( SIDECAR_PUBLISHED == 1 )); then rm -f "$SIDECAR"; fi
+    if (( MANIFEST_PUBLISHED == 1 )); then rm -f "$MANIFEST"; fi
+  fi
+}
 trap cleanup EXIT
+TMPFILE="$(mktemp "$BACKUP_DIR/.incomplete_${BASE}_XXXXXX")" || fail "could not create a temporary dump file"
+SIDECAR_TMP="$(mktemp "$BACKUP_DIR/.incomplete_${BASE}_XXXXXX")" || fail "could not create a temporary checksum file"
+MANIFEST_TMP="$(mktemp "$BACKUP_DIR/.incomplete_${BASE}_XXXXXX")" || fail "could not create a temporary manifest file"
 
 log "dumping database '$DBNAME_' from ${PGHOST_}:${PGPORT_}"
 
@@ -153,21 +173,82 @@ fi
 CHECKSUM="$(sha256sum "$TMPFILE" | awk '{print $1}')"
 
 # ------------------------------------------------------ publish atomically
-mv -f "$TMPFILE" "$TARGET"
-chmod 600 "$TARGET"
+publish_target() {
+  local index=0 candidate
+  while (( index <= 1000 )); do
+    if (( index == 0 )); then
+      candidate="$BACKUP_DIR/${BASE}.dump"
+    else
+      candidate="$BACKUP_DIR/${BASE}_${index}.dump"
+    fi
+    if [[ ! -e "$candidate" && ! -e "$candidate.sha256" && ! -e "$candidate.manifest" ]]; then
+      if ln "$TMPFILE" "$candidate" 2>/dev/null; then
+        TARGET="$candidate"
+        TARGET_PUBLISHED=1
+        return 0
+      fi
+      if [[ ! -e "$candidate" ]]; then
+        fail "could not publish dump to $candidate"
+      fi
+    fi
+    index=$((index + 1))
+  done
+  fail "could not find an unused backup filename for $BASE"
+}
+publish_target
+rm -f "$TMPFILE"
+TMPFILE=""
+chmod 600 "$TARGET" || fail "could not set dump permissions"
+
+SIDECAR="$TARGET.sha256"
+MANIFEST="$TARGET.manifest"
+printf '%s  %s\n' "$CHECKSUM" "$(basename "$TARGET")" > "$SIDECAR_TMP" ||
+  fail "could not write the checksum sidecar — backup discarded"
+if ! ln "$SIDECAR_TMP" "$SIDECAR" 2>/dev/null; then
+  fail "could not publish the checksum sidecar — backup discarded"
+fi
+SIDECAR_PUBLISHED=1
+rm -f "$SIDECAR_TMP"
+SIDECAR_TMP=""
+chmod 600 "$SIDECAR" || fail "could not set checksum permissions"
+
+{
+  printf 'database=%s\n' "$DBNAME_"
+  printf 'label=%s\n' "$LABEL"
+  printf 'file=%s\n' "$(basename "$TARGET")"
+  printf 'size_bytes=%s\n' "$SIZE_BYTES"
+  printf 'sha256=%s\n' "$CHECKSUM"
+  printf 'toc_entries=%s\n' "$TOC_ENTRIES"
+  printf 'created_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf 'pg_dump_version=%s\n' "$("$PG_DUMP" --version 2>/dev/null | head -n 1 || true)"
+} > "$MANIFEST_TMP" || fail "could not write the backup manifest — backup discarded"
+if ! ln "$MANIFEST_TMP" "$MANIFEST" 2>/dev/null; then
+  fail "could not publish the backup manifest — backup discarded"
+fi
+MANIFEST_PUBLISHED=1
+rm -f "$MANIFEST_TMP"
+MANIFEST_TMP=""
+chmod 600 "$MANIFEST" || fail "could not set manifest permissions"
+KEEP_ARTIFACTS=1
 
 log "backup created: $TARGET"
 log "size: ${SIZE_BYTES} bytes, sha256: ${CHECKSUM}"
+log "checksum: $SIDECAR"
+log "manifest: $MANIFEST"
 
 # ---------------------------------------------------------------- retention
+# Retention is deliberately scoped to this database AND this label. Evidence
+# dumps such as pharmacy_pre_fix_*.dump, other labels, and test dumps must
+# never be pruned by a nightly run.
+RETENTION_GLOB="${DBNAME_}_${LABEL}_*.dump"
 if [[ "$RETENTION_DAYS" =~ ^[0-9]+$ ]] && (( RETENTION_DAYS > 0 )); then
-  mapfile -t OLD < <(find "$BACKUP_DIR" -maxdepth 1 -type f -name "${DBNAME_}_*.dump" -mtime "+${RETENTION_DAYS}" | sort)
+  mapfile -t OLD < <(find "$BACKUP_DIR" -maxdepth 1 -type f -name "$RETENTION_GLOB" -mtime "+${RETENTION_DAYS}" | sort)
   if (( ${#OLD[@]} > 0 )); then
     for f in "${OLD[@]}"; do
       # never prune away the newest K dumps
-      NEWER="$(find "$BACKUP_DIR" -maxdepth 1 -type f -name "${DBNAME_}_*.dump" -newer "$f" | wc -l)"
+      NEWER="$(find "$BACKUP_DIR" -maxdepth 1 -type f -name "$RETENTION_GLOB" -newer "$f" | wc -l)"
       if (( NEWER >= KEEP )); then
-        rm -f "$f"
+        rm -f "$f" "$f.sha256" "$f.manifest"
         log "pruned expired dump: $(basename "$f")"
       else
         log "kept (within keep window): $(basename "$f")"

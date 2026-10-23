@@ -56,7 +56,8 @@ size was checked, a failed backup was indistinguishable from a successful one.
 4. the archive is validated with `pg_restore --list` (the TOC must be
    readable and non-empty);
 5. the sha256 checksum is computed and logged;
-6. only then is the file published with an atomic `mv` (mode `0600`);
+6. only then is the file published with an atomic no-clobber hard link
+   (mode `0600`), retrying with a `_N` suffix instead of overwriting;
 7. on any failure the temporary file is removed and the script exits non-zero,
    so a caller cannot mistake failure for success.
 
@@ -69,10 +70,23 @@ A regression test locks this in:
 backups/                                   # mode 0700
 ├── pharmacy_pre_fix_20261021_095349.dump  # legacy 0-byte file, historical evidence, DO NOT USE
 ├── pharmacy_pre_fix_20261021_095553.dump  # legacy manual dump (71 320 bytes)
-└── pharmacy_backup_20261022_133213.dump   # produced by scripts/backup-db.sh (mode 0600)
+├── pharmacy_backup_20261022_133213.dump   # produced by scripts/backup-db.sh (mode 0600)
+└── nightly/                               # scripts/nightly-backup.sh (0700)
+    ├── pharmacy_nightly_<ts>.dump         # 0600, _1/_2 suffix on collisions
+    ├── pharmacy_nightly_<ts>.dump.sha256  # 0600
+    ├── pharmacy_nightly_<ts>.dump.manifest # 0600
+    ├── logs/                              # 0700
+    └── status/                            # 0700, last-success / last-failure / last-alert-failure
 ```
 
-* directory `0700`, every dump `0600` (`umask 077` is set in the script);
+* directory `0700`, every dump and sidecar `0600` (`umask 077` is set in the
+  scripts);
+* a dump filename is never silently overwritten: publication uses an atomic
+  hard link and retries with `_1`, `_2`, ... if the timestamp name or its
+  metadata already exists;
+* a dump is eligible only when the dump, `.sha256` and `.manifest` all exist;
+  the manifest is published last, so an interrupted publication is treated as
+  incomplete, never as a verified backup;
 * the dumps contain every audit row, including usernames — treat them as
   confidential patient/operational data;
 * the database password is read from `backend/.env`, passed through
@@ -80,16 +94,39 @@ backups/                                   # mode 0700
 
 ### 2.3 Retention
 
-`scripts/backup-db.sh` prunes dumps of the same database that are older than
+`scripts/backup-db.sh` prunes only dumps matching the same **database and
+label** (`${database}_${label}_*.dump`) that are older than
 `--retention-days` (default **30**), while always keeping the `--keep` newest
-dumps (default **10**). Pruning only ever touches `*.dump` files in the
-backup directory and never the newest *K* dumps, regardless of age.
+dumps (default **10**). Evidence such as `pharmacy_pre_fix_*.dump`, test
+dumps, and quarantine files is never matched.
 
-Recommended schedule (nightly, off-peak):
+### 2.4 Nightly automation (not installed by Git)
 
-```cron
-17 2 * * *  cd /path/to/pharmacy-stock-audit && scripts/backup-db.sh --label nightly >> runtime/logs/backup.log 2>&1
+`scripts/nightly-backup.sh` wraps the validated backup with a lock, private
+logs, checksum/manifest verification, retention, and status files.
+`scripts/verify-backup.sh` checks the newest dump and can restore it into a
+disposable database without reading the live source.
+
+```bash
+scripts/nightly-backup.sh --dry-run          # no files, dumps or DB access
+scripts/verify-backup.sh --latest-nightly --check-only
 ```
+
+The intended cron entries live in `deploy/cron/pharmacy-backup.cron`:
+nightly backup at **02:17** and a Sunday **03:17** restore verification.
+Installation is a separate, explicitly approved step (`crontab
+deploy/cron/pharmacy-backup.cron`). Status is reported by
+`scripts/check-health.sh`; there is currently no email path, so
+`PHARMACY_ALERT_CMD` is the alert hook to configure.
+
+Backup success and alert success are recorded separately. A failed alert command
+does not rewrite or remove the backup result: a successful backup keeps
+`last-success`, and the alert failure is written to
+`status/last-alert-failure` with `backup_status=success|failure` and
+`alert_rc=<n>` (no alert output or secrets are stored). A later successful
+alert delivery clears that alert-failure record. `check-health.sh` goes red
+when `last-failure` is newer than `last-success`, and also when an unresolved
+`last-alert-failure` exists.
 
 Keep at least one off-host copy (the backup directory lives on the same disk
 as the database; disk failure destroys both).
@@ -101,27 +138,65 @@ as the database; disk failure destroys both).
 ### 3.1 The automated drill (safe, non-destructive)
 
 `scripts/restore-db.sh` **never** restores over a live database. It restores
-into a freshly created, disposable database, compares the row count of every
-table against the source, prints a verdict, and drops the disposable
-database again.
+into a newly created disposable database, or an existing empty drill database
+only with `--allow-existing --keep`. A database created by the run is dropped
+unless `--keep` is used; a pre-existing database is never dropped by this
+script. By default it does **not** query source data: it verifies that the
+restored copy is readable, that every public table can be counted, and that
+`alembic_version` is present.
 
 ```bash
 scripts/restore-db.sh --drill backups/pharmacy_backup_20261022_133213.dump
 scripts/restore-db.sh --drill --keep backups/....dump   # keep the drilled DB for inspection
+scripts/restore-db.sh --drill --no-live-compare backups/pharmacy_nightly_<ts>.dump
 ```
+
+`--no-live-compare` is the default and is explicit here for clarity.
+`scripts/verify-backup.sh` uses this mode for nightly verification.
+
+A source-vs-restore row-count comparison is **opt-in only** and requires
+explicit approval. It needs both `--compare-source` and
+`PHARMACY_ALLOW_SOURCE_COMPARE=1`; without the env token the script refuses
+before creating the temporary database.
+
+```bash
+PHARMACY_ALLOW_SOURCE_COMPARE=1 scripts/restore-db.sh --drill --compare-source \
+  --key-tables users,medicines,inventory_transactions,stock_audits,audit_logs \
+  backups/pharmacy_nightly_<ts>.dump
+```
+
+Four safeguards prevent a meaningless comparison:
+
+* if the dump has a `.manifest`, its `database=` value must match the database
+  in `DATABASE_URL`; a mismatch aborts **before** the temporary database is
+  created;
+* an unreadable or empty source result is a failure, not a false “match”;
+* `--key-tables` fails if any named table is absent from either side;
+* tables present only in the restored copy are reported as
+  `DIFF ... source=<missing>` and fail the comparison.
+
+A database created by the run is dropped by an `EXIT` trap on success, on a
+row-count difference, on a missing key table, and on restore failure. A
+pre-existing target selected with `--allow-existing` is only ever kept, never
+dropped.
 
 Safety interlocks (all enforced in code, not by convention):
 
 * `--drill` is mandatory — without it the script refuses to do anything;
 * the target database name is generated (`pharmacy_restore_drill_<ts>`) and the
   script aborts if it would ever equal the live database name;
-* an existing target database is refused unless `--allow-existing` is given
-  (and `pharmacy` is refused even then);
+* an existing target database is refused unless `--allow-existing --keep` is
+  given; it is accepted only when the current role owns it and it contains no
+  user relations, extra schemas, or non-default extensions; `pharmacy` and the
+  configured source database are always refused as targets;
 * an empty or unreadable dump is refused before any database is touched;
-* the source database is only ever **read** (row counts) — never written,
-  dropped or truncated;
-* the disposable database is dropped automatically, including when the restore
-  fails midway.
+* source data is not queried by default; with `--compare-source` PostgreSQL is
+  contacted only for **read-only** source row counts — never written, dropped
+  or truncated;
+* cleanup drops only a database created by the current run, including when the
+  restore fails midway. If that drop fails, the script exits non-zero with a
+  warning; when a restore/verification error already occurred, the original
+  failure is preserved instead of being masked by the cleanup error.
 
 ### 3.2 Real restore of the live database (deliberate, requires downtime)
 
@@ -147,7 +222,7 @@ procedure — plan a maintenance window and take a fresh backup first:
    ```
 4. **Verify** before cutting over — same check the drill performs:
    ```bash
-   scripts/restore-db.sh --drill --allow-existing backups/<file>.dump
+   scripts/restore-db.sh --drill backups/<file>.dump
    ```
    plus a manual sanity check of row counts (`users`, `medicines`,
    `audit_logs`) and of `alembic_version` (it must equal the revision the
@@ -220,3 +295,30 @@ checklist.
 - [ ] `alembic_version` equals the revision the deployed code expects
 - [ ] a read-only audit list loads and shows the expected entries
 - [ ] the disposable drill database was dropped (`\l` in `psql`)
+
+---
+
+## 6. R7 open gaps (not closed by this automation)
+
+These are tracked as open acceptance items, not as completed work:
+
+- **Off-host copy:** no dump is copied off this machine. Backups and the
+  database share one disk, so disk loss destroys both. A nightly off-host
+  copy and restore test are still required.
+- **Alert delivery:** there is no working mail path on the host. Failures are
+  written to `backups/nightly/status/last-failure`, the private log, and
+  optionally `PHARMACY_ALERT_CMD`. Alert-command failures are now recorded in
+  `status/last-alert-failure`, but there is still no verified end-to-end
+  delivery channel or escalation test.
+- **Legacy dump validation:** existing `pharmacy_pre_fix_*` dumps have no
+  `.sha256`/`.manifest`; the current scripts warn but cannot prove their
+  source database or integrity. They need a one-time drill before anyone
+  relies on them.
+- **Source-vs-restore comparison:** disabled by default. A row-count
+  comparison against the source requires explicit approval, `--compare-source`
+  and `PHARMACY_ALLOW_SOURCE_COMPARE=1`; it is not part of nightly automation.
+  It is a public-base-table row-count check, not a full schema/content diff.
+- **Pre-existing drill targets:** `--allow-existing` checks ownership, user
+  relations, extra schemas and non-default extensions, but not every possible
+  schema object (for example standalone functions or domains). It remains a
+  narrowly gated, empty-test-database convenience, not a general reuse mode.
