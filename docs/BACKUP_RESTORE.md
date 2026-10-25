@@ -128,6 +128,29 @@ alert delivery clears that alert-failure record. `check-health.sh` goes red
 when `last-failure` is newer than `last-success`, and also when an unresolved
 `last-alert-failure` exists.
 
+#### Optional encrypted off-host upload
+
+`scripts/nightly-backup.sh` supports an opt-in off-host copy after the local
+dump, checksum, and manifest have been verified. Configure
+`PHARMACY_OFFSITE_REMOTE` to a destination beginning with `pharmacycrypt:`
+and ensure `rclone` is installed and authenticated for that encrypted remote.
+For example, `PHARMACY_OFFSITE_REMOTE=pharmacycrypt:nightly` uploads the dump
+and its `.sha256` and `.manifest` sidecars under that remote path. Plain remotes
+such as `gdrive:` are deliberately rejected. `PHARMACY_RCLONE_BIN` can specify
+the executable path when `rclone` is not on `PATH`.
+
+The feature is disabled when `PHARMACY_OFFSITE_REMOTE` is unset. Dry-run never
+calls `rclone`. If any off-site upload fails, the run fails and does not write
+a new `last-success`; check `last-failure` and the private log. Keep OAuth and
+crypt passwords only in the protected rclone configuration—never in source,
+cron lines, or command arguments. The cron template is not installed by Git,
+and enabling this option does not install or schedule cron automatically.
+
+An encrypted off-host upload was manually tested separately, but this optional
+nightly integration has only been verified with offline fake-rclone tests so far.
+Keep the R7 off-host acceptance item open until the scheduled workflow and its
+download/checksum/restore drill are verified end to end.
+
 Keep at least one off-host copy (the backup directory lives on the same disk
 as the database; disk failure destroys both).
 

@@ -209,6 +209,23 @@ MANIFEST_FILE="$(grep -E '^file=' "$MANIFEST" | tail -n 1 | cut -d= -f2- || true
 [[ "$MANIFEST_SIZE" == "$SIZE_BYTES" ]] || fail "manifest size does not match the dump"
 [[ "$MANIFEST_FILE" == "$(basename "$DUMP")" ]] || fail "manifest filename does not match the dump"
 
+# Optional encrypted off-site copy. Never send backup data to a plain remote.
+OFFSITE_REMOTE="${PHARMACY_OFFSITE_REMOTE:-}"
+if [[ -n "$OFFSITE_REMOTE" ]]; then
+  STAGE="offsite-upload"
+  [[ "$OFFSITE_REMOTE" == pharmacycrypt:* ]] || fail "off-site remote must use pharmacycrypt:"
+  RCLONE_BIN="${PHARMACY_RCLONE_BIN:-$(command -v rclone || true)}"
+  [[ -n "$RCLONE_BIN" && -x "$RCLONE_BIN" ]] || fail "rclone executable not found"
+  for upload_file in "$DUMP" "$SIDECAR" "$MANIFEST"; do
+    remote_path="${OFFSITE_REMOTE%/}/$(basename "$upload_file")"
+    log "uploading encrypted off-site file: $(basename "$upload_file")"
+    if ! "$RCLONE_BIN" copyto "$upload_file" "$remote_path" >>"$LOG_FILE" 2>&1; then
+      fail "off-site upload failed for $(basename "$upload_file")"
+    fi
+  done
+  log "encrypted off-site upload completed"
+fi
+
 END_EPOCH="$(date +%s)"
 DURATION=$((END_EPOCH - START_EPOCH))
 {

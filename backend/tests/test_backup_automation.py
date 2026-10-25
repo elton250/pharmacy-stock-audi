@@ -1211,5 +1211,118 @@ class BackupAutomationTest(unittest.TestCase):
         self.assertIn("ignoring 1 dump(s) without .sha256/.manifest", combined)
 
 
+    def _fake_rclone(self, *, fail_on_call: int = 0) -> tuple[Path, Path]:
+        binary = self.bin / "rclone"
+        calls = self.tmp / "rclone-calls.log"
+        write_exe(
+            binary,
+            """#!/usr/bin/env bash
+set -eu
+printf '%s\\n' "$*" >> "$FAKE_RCLONE_CALLS"
+if [[ "${FAKE_RCLONE_FAIL_ON_CALL:-0}" -gt 0 ]]; then
+  n="$(wc -l < "$FAKE_RCLONE_CALLS")"
+  if [[ "$n" -eq "$FAKE_RCLONE_FAIL_ON_CALL" ]]; then
+    echo 'simulated rclone failure' >&2
+    exit 23
+  fi
+fi
+""",
+        )
+        return binary, calls
+
+    def test_nightly_offsite_uploads_dump_checksum_and_manifest(self) -> None:
+        ok = self.tmp / "fake-backup-ok.sh"
+        write_exe(ok, FAKE_BACKUP_OK)
+        rclone, calls = self._fake_rclone()
+
+        result = subprocess.run(
+            ["bash", str(NIGHTLY), "--database", "pharmacy", "--label", "nightly"],
+            capture_output=True,
+            text=True,
+            env=self.env(
+                PHARMACY_NIGHTLY_DIR=str(self.backup_dir),
+                PHARMACY_BACKUP_SCRIPT=str(ok),
+                PHARMACY_OFFSITE_REMOTE="pharmacycrypt:unit-test",
+                PHARMACY_RCLONE_BIN=str(rclone),
+                FAKE_RCLONE_CALLS=str(calls),
+            ),
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        lines = calls.read_text().splitlines()
+        self.assertEqual(len(lines), 3, lines)
+        self.assertTrue(all(line.startswith("copyto ") for line in lines), lines)
+        self.assertTrue(all("pharmacycrypt:unit-test/" in line for line in lines), lines)
+        self.assertTrue(any(line.endswith(".dump") for line in lines), lines)
+        self.assertTrue(any(line.endswith(".dump.sha256") for line in lines), lines)
+        self.assertTrue(any(line.endswith(".dump.manifest") for line in lines), lines)
+        self.assertTrue((self.backup_dir / "status" / "last-success").exists())
+
+    def test_nightly_offsite_upload_failure_does_not_write_last_success(self) -> None:
+        ok = self.tmp / "fake-backup-ok.sh"
+        write_exe(ok, FAKE_BACKUP_OK)
+        rclone, calls = self._fake_rclone(fail_on_call=2)
+
+        result = subprocess.run(
+            ["bash", str(NIGHTLY), "--database", "pharmacy", "--label", "nightly"],
+            capture_output=True,
+            text=True,
+            env=self.env(
+                PHARMACY_NIGHTLY_DIR=str(self.backup_dir),
+                PHARMACY_BACKUP_SCRIPT=str(ok),
+                PHARMACY_OFFSITE_REMOTE="pharmacycrypt:unit-test",
+                PHARMACY_RCLONE_BIN=str(rclone),
+                FAKE_RCLONE_CALLS=str(calls),
+                FAKE_RCLONE_FAIL_ON_CALL="2",
+            ),
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(len(calls.read_text().splitlines()), 2)
+        self.assertFalse((self.backup_dir / "status" / "last-success").exists())
+        failure = self.backup_dir / "status" / "last-failure"
+        self.assertTrue(failure.exists())
+        self.assertIn("stage=offsite-upload", failure.read_text())
+
+    def test_nightly_offsite_rejects_unencrypted_remote(self) -> None:
+        ok = self.tmp / "fake-backup-ok.sh"
+        write_exe(ok, FAKE_BACKUP_OK)
+        rclone, calls = self._fake_rclone()
+
+        result = subprocess.run(
+            ["bash", str(NIGHTLY), "--database", "pharmacy", "--label", "nightly"],
+            capture_output=True,
+            text=True,
+            env=self.env(
+                PHARMACY_NIGHTLY_DIR=str(self.backup_dir),
+                PHARMACY_BACKUP_SCRIPT=str(ok),
+                PHARMACY_OFFSITE_REMOTE="gdrive:unit-test",
+                PHARMACY_RCLONE_BIN=str(rclone),
+                FAKE_RCLONE_CALLS=str(calls),
+            ),
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertFalse(calls.exists())
+        self.assertFalse((self.backup_dir / "status" / "last-success").exists())
+        self.assertIn("pharmacycrypt:", result.stderr)
+
+    def test_nightly_dry_run_never_calls_offsite_rclone(self) -> None:
+        rclone, calls = self._fake_rclone()
+
+        result = subprocess.run(
+            ["bash", str(NIGHTLY), "--dry-run"],
+            capture_output=True,
+            text=True,
+            env=self.env(
+                PHARMACY_NIGHTLY_DIR=str(self.backup_dir),
+                PHARMACY_OFFSITE_REMOTE="pharmacycrypt:unit-test",
+                PHARMACY_RCLONE_BIN=str(rclone),
+                FAKE_RCLONE_CALLS=str(calls),
+            ),
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(calls.exists())
+        self.assertFalse(self.backup_dir.exists())
+        self.assertIn("dry run", result.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
