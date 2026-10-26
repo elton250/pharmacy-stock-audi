@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import {act, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, ApiError } from '../src/lib/api'
@@ -132,7 +132,7 @@ describe('VisionScan page', () => {
     expect(screen.queryByRole('button', { name: /start camera/i })).not.toBeInTheDocument()
   })
 
-  it('does not offer the camera before the backend has answered', () => {
+  it('does not offer the camera before the backend has answered', async () => {
     let release: (value: Response) => void = () => {}
     fetchMock.mockImplementation(
       () =>
@@ -149,7 +149,10 @@ describe('VisionScan page', () => {
 
     expect(screen.queryByRole('button', { name: /start camera/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /^search$/i })).not.toBeInTheDocument()
-    release(jsonResponse(200, {}))
+
+    await act(async () => {
+      release(jsonResponse(200, {}))
+    })
   })
 
   it('shows the camera and the manual entry when the engine is available', async () => {
