@@ -292,6 +292,32 @@ def test_confirm_records_the_decision_and_deletes_the_image(admin_api, engine, c
     assert "vision.capture_confirmed" in actions
 
 
+
+def test_confirm_does_not_close_capture_when_image_deletion_fails(
+    admin_api, engine, capture_dir, db, monkeypatch
+):
+    medicine = _medicine_with_barcode(admin_api, "8901234567890")
+    capture_id = _upload(admin_api, _png_bytes()).json()["capture_id"]
+    capture = db.get(VisionCapture, capture_id)
+    stored = Path(capture.image_path)
+
+    def fail_delete(_capture):
+        return False
+
+    monkeypatch.setattr("app.services.vision.delete_image", fail_delete)
+
+    resp = admin_api.post(
+        f"/api/vision/captures/{capture_id}/confirm",
+        json={"decision": "confirm", "medicine_id": medicine["id"]},
+    )
+
+    assert resp.status_code == 503
+    assert resp.json()["code"] == "image_delete_failed"
+    db.refresh(capture)
+    assert capture.status == CaptureStatus.PENDING
+    assert capture.image_path is not None
+    assert stored.exists()
+
 def test_reject_closes_the_capture_without_a_match(admin_api, engine, capture_dir):
     capture_id = _upload(admin_api, _png_bytes()).json()["capture_id"]
     resp = admin_api.post(
@@ -433,6 +459,36 @@ def test_expired_captures_are_pruned(admin_api, engine, capture_dir, db):
     assert capture.candidates == []
     assert capture.image_path is None
 
+
+
+def test_prune_keeps_capture_pending_when_image_deletion_fails(
+    admin_api, engine, capture_dir, db, monkeypatch
+):
+    capture_id = _upload(admin_api, _png_bytes()).json()["capture_id"]
+    capture = db.get(VisionCapture, capture_id)
+    stored = Path(capture.image_path)
+    capture.created_at = utcnow() - timedelta(days=45)
+    db.commit()
+    original_ocr_text = capture.ocr_text
+    original_candidates = list(capture.candidates)
+
+    def fail_delete(_capture):
+        return False
+
+    monkeypatch.setattr("app.services.vision.delete_image", fail_delete)
+
+    from app.services.vision import prune_expired_captures
+
+    result = prune_expired_captures(db, retention_days=30)
+
+    db.refresh(capture)
+    assert result["expired_captures"] == 0
+    assert result["images_deleted"] == 0
+    assert capture.status == CaptureStatus.PENDING
+    assert capture.ocr_text == original_ocr_text
+    assert capture.candidates == original_candidates
+    assert capture.image_path is not None
+    assert stored.exists()
 
 def test_prune_dry_run_changes_nothing(admin_api, engine, capture_dir, db):
     capture_id = _upload(admin_api, _png_bytes()).json()["capture_id"]

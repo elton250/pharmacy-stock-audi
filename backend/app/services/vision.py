@@ -1,7 +1,6 @@
 """Vision-assisted identification.
 
 Responsibilities of this module:
-
 * validate an uploaded image (size, real file type, pixel count);
 * strip metadata (EXIF/GPS) by re-encoding the picture;
 * store it in a non-public runtime directory with restrictive permissions;
@@ -362,21 +361,29 @@ def confirm_capture(
     if capture.status != CaptureStatus.PENDING:
         raise ApiError(409, "This capture was already closed", "capture_already_closed")
 
+    medicine = None
     if decision == "confirm":
         if medicine_id is None:
             raise ApiError(422, "A medicine has to be confirmed", "medicine_required")
         medicine = db.get(Medicine, medicine_id)
         if medicine is None:
             raise ApiError(404, "Medicine not found", "not_found")
+
+    # Do not close the capture if its private image could not be removed.
+    if capture.image_path and not delete_image(capture):
+        raise ApiError(
+            503,
+            "The captured image could not be deleted; please retry",
+            "image_delete_failed",
+        )
+
+    if decision == "confirm":
         capture.status = CaptureStatus.CONFIRMED
         capture.matched_medicine_id = medicine.id
     else:
         capture.status = CaptureStatus.REJECTED
 
     capture.confirmed_at = utcnow()
-
-    # The image has served its purpose once a human has decided.
-    delete_image(capture)
     db.add(capture)
     db.commit()
     return capture
@@ -403,23 +410,34 @@ def prune_expired_captures(
         ).scalars()
     )
     expired = [row for row in rows if row.status == CaptureStatus.PENDING]
+    expired_count = 0
     deleted_files = 0
     for row in expired:
-        if row.image_path and Path(row.image_path).exists():
-            deleted_files += 1
         if dry_run:
+            expired_count += 1
             continue
-        delete_image(row)
+
+        had_image = bool(row.image_path)
+        image_existed = bool(
+            row.image_path and Path(row.image_path).is_file()
+        )
+        if had_image and not delete_image(row):
+            continue
+
+        if image_existed:
+            deleted_files += 1
         row.status = CaptureStatus.EXPIRED
         row.ocr_text = ""
         row.candidates = []
         db.add(row)
+        expired_count += 1
+
     if not dry_run:
         db.commit()
     return {
         "retention_days": days,
         "cutoff": cutoff.isoformat(),
-        "expired_captures": len(expired),
+        "expired_captures": expired_count,
         "images_deleted": deleted_files,
         "dry_run": dry_run,
     }
