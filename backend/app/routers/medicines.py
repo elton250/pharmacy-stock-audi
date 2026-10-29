@@ -199,6 +199,25 @@ def create_medicine(
     db: DbSession = Depends(get_db),
     user: User = Depends(require_permission("medicine:manage")),
 ):
+
+    # Reject duplicate medicines with the same name, strength and dosage form.
+    duplicate = db.execute(
+        select(Medicine).where(
+            func.lower(func.trim(Medicine.name))
+            == payload.name.strip().lower(),
+            func.lower(func.trim(func.coalesce(Medicine.strength, "")))
+            == (payload.strength or "").strip().lower(),
+            func.lower(func.trim(func.coalesce(Medicine.dosage_form, "")))
+            == (payload.dosage_form or "").strip().lower(),
+        )
+    ).scalar_one_or_none()
+
+    if duplicate is not None:
+        raise ApiError(
+            409,
+            "A medicine with the same name, strength and dosage form already exists.",
+            "duplicate_medicine",
+        )
     medicine = Medicine(
         name=payload.name,
         generic_name=payload.generic_name,

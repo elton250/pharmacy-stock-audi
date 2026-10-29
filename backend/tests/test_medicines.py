@@ -85,3 +85,14 @@ def test_duplicate_barcode_rejected(admin_api):
     resp = admin_api.post("/api/medicines", json=other)
     assert resp.status_code == 409
     assert resp.json()["code"] == "barcode_taken"
+def test_duplicate_medicine_rejected(admin_api):
+    first = admin_api.post("/api/medicines", json=FIXTURE_MEDICINE)
+    assert first.status_code == 201
+
+    duplicate_payload = dict(FIXTURE_MEDICINE)
+    duplicate_payload["name"] = FIXTURE_MEDICINE["name"].swapcase()
+
+    response = admin_api.post("/api/medicines", json=duplicate_payload)
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "duplicate_medicine"
