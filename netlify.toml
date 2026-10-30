@@ -1,0 +1,5 @@
+[[redirects]]
+  from = "/api/*"
+  to = "https://pharmacy-stock-audit-api.onrender.com/api/:splat"
+  status = 200
+  force = true
