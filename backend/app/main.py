@@ -16,6 +16,7 @@ from app.routers import (
     counting,
     counting_archive,
     inventory,
+    finance,
     medicines,
     meta,
     reports,
@@ -70,6 +71,7 @@ def create_app() -> FastAPI:
     app.include_router(users.router)
     app.include_router(medicines.router)
     app.include_router(inventory.router)
+    app.include_router(finance.router)
     app.include_router(counting.router)
     app.include_router(counting_archive.router)
     app.include_router(audits.router)
