@@ -320,6 +320,13 @@ def submit_count(
             raise ApiError(409, "Idempotency key was already used for another session", "idempotency_conflict")
         # A key may only replay the exact same payload. Reusing it for a
         # different draft must never silently return an unrelated old count.
+        line_sort_key = lambda item: (
+            item[0] is not None,
+            item[0] or 0,
+            item[1],
+            item[2] is not None,
+            item[2] or Decimal("0"),
+        )
         requested_lines = sorted(
             (
                 line.package_config_id,
@@ -327,7 +334,7 @@ def submit_count(
                 line.partial_units,
             )
             for line in payload.lines
-        )
+        , key=line_sort_key)
         stored_lines = sorted(
             (
                 line.package_config_id,
@@ -335,7 +342,7 @@ def submit_count(
                 line.partial_units,
             )
             for line in existing.lines
-        )
+        , key=line_sort_key)
         if requested_lines != stored_lines:
             raise ApiError(
                 409,
