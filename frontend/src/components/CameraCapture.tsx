@@ -284,7 +284,7 @@ export default function CameraCapture({ onPicked, activeMedicine, onBlisterCount
                         <button
                           className="btn btn-sm"
                           onClick={() => void confirmCandidate(candidate)}
-                          disabled={busy}
+                          disabled={busy || (!!activeMedicine && !!onBlisterCountAccepted && candidate.medicine_id !== activeMedicine.id)}
                         >
                           Confirm
                         </button>
