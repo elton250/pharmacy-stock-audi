@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { api, ApiError, type Page } from '../lib/api'
 import type { CountingSessionOut, MedicineOut, PackageOut } from '../lib/types'
 import { Alert, ConfirmDialog, Field, Spinner, StatusBadge, fmt, fmtDate, useToast } from '../components/ui'
+import CameraCapture from '../components/CameraCapture'
 import { useAuth } from '../context/AuthContext'
 
 interface LineDraft {
@@ -588,6 +589,26 @@ export default function Counting() {
                 })
               }
             />
+            {active.status === 'IN_PROGRESS' && active.active_medicine && canOperate(active) && can('count:perform') && (
+              <div className="mt">
+                <h2>Count tablets from blister</h2>
+                <p className="muted">AI counts visible tablets. The medicine must match the active medicine above; confirm the result to add it to this session's unsaved draft.</p>
+                <CameraCapture
+                  activeMedicine={{ id: active.active_medicine.id, name: active.active_medicine.name }}
+                  onBlisterCountAccepted={(count) => {
+                    setLines((prev) => [...prev, {
+                      key: lineSeq++,
+                      package_config_id: null,
+                      package_label: 'AI-counted blister tablets',
+                      quantity: String(count),
+                      partial_units: '',
+                      units_per_unit: 1,
+                    }])
+                    show(count + ' tablets added to the current session draft. Press Save count to record.')
+                  }}
+                />
+              </div>
+            )}
           ) : (
             <div className="card">
               <p className="muted">
