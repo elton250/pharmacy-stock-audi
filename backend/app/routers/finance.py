@@ -63,3 +63,72 @@ def summary(start:datetime|None=None,end:datetime|None=None,db:DbSession=Depends
         if start:typesq=typesq.where(model.occurred_at>=start)
         if end:typesq=typesq.where(model.occurred_at<end)
     return {"different_medicine_types_received":db.execute(typesq).scalar_one(),"total_units_received":receipts,"total_units_sold":sales,"sales_revenue":revenue,"purchase_cost":purchases,"operating_expenses":expenses,"gross_margin_before_operating_expenses":revenue-purchases,"net_after_purchase_cost_and_operating_expenses":revenue-purchases-expenses}
+
+
+@router.get("/receipts")
+def list_receipts(
+    start: datetime | None = None,
+    end: datetime | None = None,
+    medicine_id: int | None = None,
+    db: DbSession = Depends(get_db),
+    user: User = Depends(require_permission("report:view")),
+):
+    q = select(StockReceipt, Medicine.name).join(Medicine, Medicine.id == StockReceipt.medicine_id)
+    if start:
+        q = q.where(StockReceipt.occurred_at >= start)
+    if end:
+        q = q.where(StockReceipt.occurred_at < end)
+    if medicine_id:
+        q = q.where(StockReceipt.medicine_id == medicine_id)
+    rows = db.execute(q.order_by(StockReceipt.occurred_at.desc(), StockReceipt.id.desc()).limit(500)).all()
+    return [
+        {"id": r.id, "medicine_id": r.medicine_id, "medicine_name": name,
+         "quantity": r.quantity, "unit_cost": r.unit_cost,
+         "purchase_total": r.quantity * r.unit_cost, "supplier": r.supplier,
+         "reference_number": r.reference_number, "occurred_at": r.occurred_at}
+        for r, name in rows
+    ]
+
+
+@router.get("/sales")
+def list_sales(
+    start: datetime | None = None,
+    end: datetime | None = None,
+    medicine_id: int | None = None,
+    db: DbSession = Depends(get_db),
+    user: User = Depends(require_permission("report:view")),
+):
+    q = select(MedicineSale, Medicine.name).join(Medicine, Medicine.id == MedicineSale.medicine_id)
+    if start:
+        q = q.where(MedicineSale.occurred_at >= start)
+    if end:
+        q = q.where(MedicineSale.occurred_at < end)
+    if medicine_id:
+        q = q.where(MedicineSale.medicine_id == medicine_id)
+    rows = db.execute(q.order_by(MedicineSale.occurred_at.desc(), MedicineSale.id.desc()).limit(500)).all()
+    return [
+        {"id": r.id, "medicine_id": r.medicine_id, "medicine_name": name,
+         "quantity": r.quantity, "unit_price": r.unit_price,
+         "revenue": r.quantity * r.unit_price, "occurred_at": r.occurred_at}
+        for r, name in rows
+    ]
+
+
+@router.get("/expenses")
+def list_expenses(
+    start: datetime | None = None,
+    end: datetime | None = None,
+    db: DbSession = Depends(get_db),
+    user: User = Depends(require_permission("report:view")),
+):
+    q = select(OperatingExpense)
+    if start:
+        q = q.where(OperatingExpense.occurred_at >= start)
+    if end:
+        q = q.where(OperatingExpense.occurred_at < end)
+    rows = db.execute(q.order_by(OperatingExpense.occurred_at.desc(), OperatingExpense.id.desc()).limit(500)).scalars().all()
+    return [
+        {"id": r.id, "category": r.category, "description": r.description,
+         "amount": r.amount, "occurred_at": r.occurred_at}
+        for r in rows
+    ]
