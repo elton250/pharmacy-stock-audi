@@ -35,7 +35,6 @@ export default function Reports() {
     try {
       if (tab === 'finance') {
         const start = new Date(month+'-01T00:00:00').toISOString()
-        const next = new Date(new Date(month+'-01T00:00:00').getTime()).toISOString()
         const [sum,rec,sale,exp] = await Promise.all([
           api.get<FinanceSummary>(`/api/finance/summary?start=${encodeURIComponent(start)}&end=${encodeURIComponent(new Date(new Date(month+'-01T00:00:00').setMonth(new Date(month+'-01T00:00:00').getMonth()+1)).toISOString())}`),
           api.get<Receipt[]>(`/api/finance/receipts?start=${encodeURIComponent(start)}&end=${encodeURIComponent(new Date(new Date(month+'-01T00:00:00').setMonth(new Date(month+'-01T00:00:00').getMonth()+1)).toISOString())}`),
