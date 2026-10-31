@@ -17,6 +17,8 @@ interface BlisterCountProposal {
 interface Props {
   /** Called when a human picked a medicine (camera capture or manual entry). */
   onPicked?: (candidate: VisionCandidate, source: 'capture' | 'manual') => void
+  activeMedicine?: { id: number; name: string }
+  onBlisterCountAccepted?: (count: number) => void
 }
 
 const MATCH_LABEL: Record<VisionCandidate['match_type'], string> = {
@@ -33,7 +35,7 @@ const MATCH_LABEL: Record<VisionCandidate['match_type'], string> = {
  * or written to stock automatically. The manual entry below stays available
  * in every situation (no camera, no OCR engine, unreadable picture).
  */
-export default function CameraCapture({ onPicked }: Props) {
+export default function CameraCapture({ onPicked, activeMedicine, onBlisterCountAccepted }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const [cameraOn, setCameraOn] = useState(false)
@@ -134,6 +136,23 @@ export default function CameraCapture({ onPicked }: Props) {
     }
   }
 
+  const acceptBlisterCount = async () => {
+    if (!captureId || !activeMedicine || !onBlisterCountAccepted || !blisterCount) return
+    const match = candidates.find((candidate) => candidate.medicine_id === activeMedicine.id)
+    if (!match) { setError('Medicine mismatch. Nothing was added.'); return }
+    if (blisterCount.visible_tablet_count === null || blisterCount.uncertain || blisterCount.confidence < 0.75) {
+      setError('AI confidence is too low. Retake the picture or flag it for review.'); return
+    }
+    setBusy(true); setError(null)
+    try {
+      await api.post(`/api/vision/captures/${captureId}/confirm`, { decision: 'confirm', medicine_id: activeMedicine.id })
+      onBlisterCountAccepted(blisterCount.visible_tablet_count)
+      setCandidates([]); setBlisterCount(null); setCaptureId(null); setOcrText('')
+      setNotice(`Added ${blisterCount.visible_tablet_count} tablets to the unsaved count for ${activeMedicine.name}. Save the count to record it.`)
+    } catch (err) { setError(err instanceof ApiError ? err.message : 'The count could not be accepted.') }
+    finally { setBusy(false) }
+  }
+
   const confirmCandidate = async (candidate: VisionCandidate) => {
     if (!captureId) return
     setBusy(true)
@@ -224,6 +243,7 @@ export default function CameraCapture({ onPicked }: Props) {
               {blisterCount.notes && <p>{blisterCount.notes}</p>}
               {blisterCount.uncertain && <Alert kind="warning">The AI is uncertain. Retake or review the image before accepting any count.</Alert>}
               <Alert kind="info">This is only a proposal. It has not been added to an audit or stock; human confirmation is required.</Alert>
+              {activeMedicine && onBlisterCountAccepted && (candidates.some((candidate) => candidate.medicine_id === activeMedicine.id) ? <div className="mt"><Alert kind="success">Medicine matches the active count: <strong>{activeMedicine.name}</strong>.</Alert><button className="btn" onClick={() => void acceptBlisterCount()} disabled={busy || blisterCount.visible_tablet_count === null || blisterCount.uncertain || blisterCount.confidence < 0.75}>Confirm medicine and add {blisterCount.visible_tablet_count ?? '—'} tablets</button></div> : <Alert kind="warning">Medicine mismatch or no reliable match for {activeMedicine.name}. Nothing was added.</Alert>)}
             </div>
           )}
         </div>
