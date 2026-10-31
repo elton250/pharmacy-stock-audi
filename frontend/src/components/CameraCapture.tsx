@@ -3,6 +3,17 @@ import { api, ApiError } from '../lib/api'
 import type { VisionCandidate, VisionCapture } from '../lib/types'
 import { Alert, Field } from './ui'
 
+interface BlisterCountProposal {
+  capture_id: string
+  visible_tablet_count: number | null
+  confidence: number
+  medicine_text: string | null
+  uncertain: boolean
+  notes: string
+  provider_model: string
+  requires_human_confirmation: boolean
+}
+
 interface Props {
   /** Called when a human picked a medicine (camera capture or manual entry). */
   onPicked?: (candidate: VisionCandidate, source: 'capture' | 'manual') => void
@@ -33,6 +44,7 @@ export default function CameraCapture({ onPicked }: Props) {
   const [captureId, setCaptureId] = useState<string | null>(null)
   const [ocrText, setOcrText] = useState('')
   const [manualText, setManualText] = useState('')
+  const [blisterCount, setBlisterCount] = useState<BlisterCountProposal | null>(null)
 
   const stopTracks = useCallback(() => {
     streamRef.current?.getTracks().forEach((track) => track.stop())
@@ -80,6 +92,7 @@ export default function CameraCapture({ onPicked }: Props) {
     setBusy(true)
     setError(null)
     setNotice(null)
+    setBlisterCount(null)
     try {
       const canvas = document.createElement('canvas')
       canvas.width = video.videoWidth || 640
@@ -106,6 +119,21 @@ export default function CameraCapture({ onPicked }: Props) {
     }
   }
 
+  const countBlister = async () => {
+    if (!captureId) return
+    setBusy(true)
+    setError(null)
+    setNotice(null)
+    try {
+      const result = await api.post<BlisterCountProposal>('/api/vision/captures/' + captureId + '/count-blister')
+      setBlisterCount(result)
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'The blister could not be counted.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const confirmCandidate = async (candidate: VisionCandidate) => {
     if (!captureId) return
     setBusy(true)
@@ -116,6 +144,7 @@ export default function CameraCapture({ onPicked }: Props) {
         medicine_id: candidate.medicine_id,
       })
       setCandidates([])
+      setBlisterCount(null)
       setCaptureId(null)
       setOcrText('')
       setNotice(`Confirmed: ${candidate.name}. The picture was deleted.`)
@@ -136,6 +165,7 @@ export default function CameraCapture({ onPicked }: Props) {
     try {
       const found = await api.post<VisionCandidate[]>('/api/vision/scan-text', { text })
       setCaptureId(null)
+      setBlisterCount(null)
       setOcrText('')
       setCandidates(found)
       if (found.length === 0) {
@@ -153,8 +183,9 @@ export default function CameraCapture({ onPicked }: Props) {
       <div className="card">
         <h2>Camera</h2>
         <p className="muted">
-          The picture is recognised on this server, never in the cloud. Nothing is created and no stock is
-          written — you confirm the medicine yourself.
+          OCR reads medicine text on the server. If you request a blister count, the image is sent to the
+          configured vision AI provider to estimate visible tablets. Review the estimate yourself; it never
+          updates stock automatically.
         </p>
         <video ref={videoRef} className="camera-preview" muted playsInline data-testid="camera-preview" />
         <div className="btn-row mt">
@@ -177,6 +208,26 @@ export default function CameraCapture({ onPicked }: Props) {
 
       {error && <Alert kind="error">{error}</Alert>}
       {notice && <Alert kind="info">{notice}</Alert>}
+
+      {captureId && (
+        <div className="card">
+          <h2>Blister tablet count</h2>
+          <p className="muted">For strips or blisters, including partly emptied ones. The captured image is sent to the configured AI provider.</p>
+          <button className="btn" onClick={() => void countBlister()} disabled={busy}>
+            {busy ? 'Analyzing blister…' : 'Count visible tablets'}
+          </button>
+          {blisterCount && (
+            <div className="mt">
+              <h3>{blisterCount.visible_tablet_count === null ? 'Count unavailable' : blisterCount.visible_tablet_count + ' visible tablets'}</h3>
+              <p>AI confidence: {(blisterCount.confidence * 100).toFixed(0)}%</p>
+              {blisterCount.medicine_text && <p>Text detected: {blisterCount.medicine_text}</p>}
+              {blisterCount.notes && <p>{blisterCount.notes}</p>}
+              {blisterCount.uncertain && <Alert kind="warning">The AI is uncertain. Retake or review the image before accepting any count.</Alert>}
+              <Alert kind="info">This is only a proposal. It has not been added to an audit or stock; human confirmation is required.</Alert>
+            </div>
+          )}
+        </div>
+      )}
 
       {ocrText && (
         <div className="card">
