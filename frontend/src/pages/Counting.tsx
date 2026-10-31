@@ -246,6 +246,36 @@ export default function Counting() {
 
   const total = useMemo(() => lines.reduce((acc, l) => acc + lineBase(l), 0), [lines, packages])
 
+  const scanActivePackage = async (code: string) => {
+    if (!active?.active_medicine || busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await api.get<{ found: boolean; medicine?: MedicineOut | null; message?: string }>(
+        `/api/medicines/scan?barcode=${encodeURIComponent(code.trim())}`,
+      )
+      if (!res.found || !res.medicine) throw new Error(res.message ?? 'Unknown barcode')
+      if (res.medicine.id !== active.active_medicine.id) {
+        throw new Error('This barcode belongs to a different medicine. This audit session is locked to ' + active.active_medicine.name)
+      }
+      const configured = active.active_medicine.packages
+      if (configured.length !== 1) {
+        throw new Error('Medicine identified, but its box size is not uniquely configured. Select the package manually before counting.')
+      }
+      const pkg = configured[0]
+      setLines(prev => {
+        const existing = prev.find(l => l.package_config_id === pkg.id && l.partial_units === '')
+        if (existing) return prev.map(l => l.key === existing.key ? { ...l, quantity: String(Number(l.quantity || 0) + 1) } : l)
+        return [...prev, { key: lineSeq++, package_config_id: pkg.id, package_label: pkg.name, quantity: '1', partial_units: '', units_per_unit: Number(pkg.units_in_base ?? pkg.units_per_parent) }]
+      })
+      show('One ' + pkg.name + ' added to this audit count')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Barcode scan failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const submitCount = async () => {
     if (!active) return
     setBusy(true)
@@ -528,6 +558,7 @@ export default function Counting() {
               total={total}
               busy={busy}
               onAddLine={addLine}
+              onScanPackage={(code) => scanActivePackage(code)}
               onRemoveLine={(key) => setLines((p) => p.filter((l) => l.key !== key))}
               onSetLinePackage={setLinePackage}
               onSetLineValue={(key, field, value) =>
@@ -675,6 +706,7 @@ function ActiveSession({
   total,
   busy,
   onAddLine,
+  onScanPackage,
   onRemoveLine,
   onSetLinePackage,
   onSetLineValue,
@@ -694,6 +726,7 @@ function ActiveSession({
   total: number
   busy: boolean
   onAddLine: () => void
+  onScanPackage: (code: string) => Promise<void>
   onRemoveLine: (key: number) => void
   onSetLinePackage: (key: number, pkgId: number | null) => void
   onSetLineValue: (key: number, field: 'quantity' | 'partial_units', value: string) => void
@@ -711,6 +744,7 @@ function ActiveSession({
   const medicine = session.active_medicine
   const packages = medicine?.packages ?? []
   const status = session.status
+  const [packageBarcode, setPackageBarcode] = useState('')
 
   return (
     <div className="card">
@@ -740,6 +774,11 @@ function ActiveSession({
       {(status === 'IN_PROGRESS' && canOperate) && (
         <>
           <h2>Add count</h2>
+          <Field label="Scan full-box barcode" hint="Each successful scan adds one configured package to this session only.">
+            <input value={packageBarcode} onChange={e => setPackageBarcode(e.target.value)} onKeyDown={e => {
+              if (e.key === 'Enter') { e.preventDefault(); const code = packageBarcode; setPackageBarcode(''); void onScanPackage(code) }
+            }} placeholder="Scan box barcode…" disabled={busy} />
+          </Field>
           <p className="muted">
             Enter full packages, cut (partial) packages and loose base units. Totals convert using this medicine's
             own package configuration.
