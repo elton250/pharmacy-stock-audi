@@ -63,6 +63,13 @@ class Settings(BaseSettings):
     ocr_language: str = "eng"
     ocr_timeout_seconds: int = 15
 
+    # Optional vision-capable AI for counting visible tablets in blister images.
+    # Credentials remain server-side; no stock is changed by this provider.
+    vision_ai_api_key: str = ""
+    vision_ai_base_url: str = "https://api.openai.com/v1"
+    vision_ai_model: str = "gpt-4o-mini"
+    vision_ai_timeout_seconds: int = 45
+
 
 @lru_cache
 def get_settings() -> Settings:
