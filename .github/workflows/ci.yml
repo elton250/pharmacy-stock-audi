@@ -27,7 +27,8 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
-      - run: npm test -- --run
+      - run: npm run typecheck:test
+      - run: npm test
       - run: npm run build
 
   backend:
@@ -47,8 +48,8 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Run backend tests
         env:
-          DATABASE_URL: sqlite:///./ci-test.db
           SECRET_KEY: ci-only-not-a-production-secret
+          DATABASE_URL: sqlite:///./ci-test.db
         run: |
           if [ -d tests ] && find tests -name 'test_*.py' -print -quit | grep -q .; then
             pytest -q tests
