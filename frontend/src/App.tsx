@@ -12,6 +12,7 @@ import Medicines from './pages/Medicines'
 import MedicineForm from './pages/MedicineForm'
 import Counting from './pages/Counting'
 import Inventory from './pages/Inventory'
+import Finance from './pages/Finance'
 import Audits from './pages/Audits'
 import Reports from './pages/Reports'
 import Users from './pages/Users'
@@ -71,6 +72,9 @@ function RoutesInner() {
         <Route path="medicines/:id/edit" element={<MedicineForm />} />
         <Route path="counting" element={<Counting />} />
         <Route path="inventory" element={<Inventory />} />
+        <Route path="stock-in" element={<Finance mode="stock-in" />} />
+        <Route path="sales" element={<Finance mode="sales" />} />
+        <Route path="expenses" element={<Finance mode="expenses" />} />
         <Route path="audits" element={<Audits />} />
         <Route path="reports" element={<Reports />} />
         <Route path="users" element={<Users />} />
