@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -41,18 +42,20 @@ def test_count_blister_returns_proposal_without_stock_side_effect(monkeypatch, t
     image.write_bytes(b"test-image")
     monkeypatch.setattr(blister_counting, "get_settings", lambda: _settings())
 
+    result_json = {
+        "visible_tablet_count": 9,
+        "confidence": 0.94,
+        "medicine_text": "Example 500mg",
+        "uncertain": False,
+        "notes": "Nine visible tablets",
+    }
+    response_payload = {
+        "choices": [{"message": {"content": json.dumps(result_json)}}]
+    }
     response = Mock()
     response.__enter__ = Mock(return_value=response)
     response.__exit__ = Mock(return_value=False)
-    response.read.return_value = (
-        b'{"choices":[{"message":{"content":"'
-        b'\\\"visible_tablet_count\\\":9,'
-        b'\\\"confidence\\\":0.94,'
-        b'\\\"medicine_text\\\":\\\"Example 500mg\\\",'
-        b'\\\"uncertain\\\":false,'
-        b'\\\"notes\\\":\\\"Nine visible tablets\\\"'
-        b'"}}]}'
-    )
+    response.read.return_value = json.dumps(response_payload).encode("utf-8")
     urlopen = Mock(return_value=response)
     monkeypatch.setattr(blister_counting.urllib.request, "urlopen", urlopen)
 
