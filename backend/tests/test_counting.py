@@ -177,6 +177,25 @@ def test_idempotent_duplicate_submission(api):
     assert len(detail["events"]) == 1
 
 
+
+def test_idempotency_key_reuse_with_different_count_is_rejected(api):
+    med1, _ = _bootstrap(api)
+    session = api.post("/api/counting/sessions", json={"medicine_id": med1["id"]}).json()
+    key = str(uuid.uuid4())
+    url = f"/api/counting/sessions/{session['id']}/counts"
+
+    first = api.post(url, json={"idempotency_key": key, "lines": [{"quantity": 7}]})
+    assert first.status_code == 201
+
+    replay = api.post(url, json={"idempotency_key": key, "lines": [{"quantity": 8}]})
+    assert replay.status_code == 409
+    assert replay.json()["code"] == "idempotency_conflict"
+
+    detail = api.get(f"/api/counting/sessions/{session['id']}").json()
+    assert detail["total_counted_base_units"] == "7.000"
+    assert len(detail["events"]) == 1
+
+
 def test_submit_without_counts_rejected(api):
     med1, _ = _bootstrap(api)
     session = api.post("/api/counting/sessions", json={"medicine_id": med1["id"]}).json()
