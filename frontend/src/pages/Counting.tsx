@@ -85,6 +85,9 @@ export default function Counting() {
   // Reuse the same idempotency key for retries of an identical unsaved payload.
   // A changed draft gets a different key; a successful save clears the retry key.
   const countRetryRef = useRef<{ fingerprint: string; key: string } | null>(null)
+  // Synchronous locks prevent two clicks/events before React re-renders.
+  const scanInFlightRef = useRef(false)
+  const submitInFlightRef = useRef(false)
   useEffect(() => {
     linesRef.current = lines
   }, [lines])
@@ -251,7 +254,8 @@ export default function Counting() {
   const total = useMemo(() => lines.reduce((acc, l) => acc + lineBase(l), 0), [lines, packages])
 
   const scanActivePackage = async (code: string) => {
-    if (!active?.active_medicine || busy) return
+    if (!active?.active_medicine || busy || scanInFlightRef.current) return
+    scanInFlightRef.current = true
     setBusy(true)
     setError(null)
     try {
@@ -276,12 +280,14 @@ export default function Counting() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Barcode scan failed')
     } finally {
+      scanInFlightRef.current = false
       setBusy(false)
     }
   }
 
   const submitCount = async () => {
-    if (!active) return
+    if (!active || busy || submitInFlightRef.current) return
+    submitInFlightRef.current = true
     setBusy(true)
     setError(null)
     try {
@@ -312,6 +318,7 @@ export default function Counting() {
     } catch (err) {
       setError(describeError(err, 'Failed to save count'))
     } finally {
+      submitInFlightRef.current = false
       setBusy(false)
     }
   }
