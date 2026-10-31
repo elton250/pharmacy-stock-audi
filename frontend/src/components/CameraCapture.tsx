@@ -38,6 +38,9 @@ const MATCH_LABEL: Record<VisionCandidate['match_type'], string> = {
 export default function CameraCapture({ onPicked, activeMedicine, onBlisterCountAccepted }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
+  // Guard async actions synchronously: disabled buttons alone do not stop two
+  // clicks arriving before React has rendered the busy state.
+  const actionLockRef = useRef(false)
   const [cameraOn, setCameraOn] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -122,7 +125,8 @@ export default function CameraCapture({ onPicked, activeMedicine, onBlisterCount
   }
 
   const countBlister = async () => {
-    if (!captureId) return
+    if (!captureId || actionLockRef.current) return
+    actionLockRef.current = true
     setBusy(true)
     setError(null)
     setNotice(null)
@@ -132,17 +136,19 @@ export default function CameraCapture({ onPicked, activeMedicine, onBlisterCount
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'The blister could not be counted.')
     } finally {
+      actionLockRef.current = false
       setBusy(false)
     }
   }
 
   const acceptBlisterCount = async () => {
-    if (!captureId || !activeMedicine || !onBlisterCountAccepted || !blisterCount) return
+    if (!captureId || !activeMedicine || !onBlisterCountAccepted || !blisterCount || actionLockRef.current) return
     const match = candidates.find((candidate) => candidate.medicine_id === activeMedicine.id)
     if (!match) { setError('Medicine mismatch. Nothing was added.'); return }
     if (blisterCount.visible_tablet_count === null || blisterCount.uncertain || blisterCount.confidence < 0.75) {
       setError('AI confidence is too low. Retake the picture or flag it for review.'); return
     }
+    actionLockRef.current = true
     setBusy(true); setError(null)
     try {
       await api.post(`/api/vision/captures/${captureId}/confirm`, { decision: 'confirm', medicine_id: activeMedicine.id })
@@ -150,11 +156,12 @@ export default function CameraCapture({ onPicked, activeMedicine, onBlisterCount
       setCandidates([]); setBlisterCount(null); setCaptureId(null); setOcrText('')
       setNotice(`Added ${blisterCount.visible_tablet_count} tablets to the unsaved count for ${activeMedicine.name}. Save the count to record it.`)
     } catch (err) { setError(err instanceof ApiError ? err.message : 'The count could not be accepted.') }
-    finally { setBusy(false) }
+    finally { actionLockRef.current = false; setBusy(false) }
   }
 
   const confirmCandidate = async (candidate: VisionCandidate) => {
-    if (!captureId) return
+    if (!captureId || actionLockRef.current) return
+    actionLockRef.current = true
     setBusy(true)
     setError(null)
     try {
@@ -171,6 +178,7 @@ export default function CameraCapture({ onPicked, activeMedicine, onBlisterCount
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'The identification could not be confirmed.')
     } finally {
+      actionLockRef.current = false
       setBusy(false)
     }
   }
