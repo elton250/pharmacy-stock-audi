@@ -66,3 +66,49 @@ def test_count_blister_returns_proposal_without_stock_side_effect(monkeypatch, t
     assert result["medicine_text"] == "Example 500mg"
     assert result["requires_human_confirmation"] is True
     urlopen.assert_called_once()
+
+
+def test_count_blister_rejects_boolean_count(monkeypatch, tmp_path):
+    image = tmp_path / "blister.jpg"
+    image.write_bytes(b"test-image")
+    monkeypatch.setattr(blister_counting, "get_settings", lambda: _settings())
+
+    payload = {"choices": [{"message": {"content": json.dumps({
+        "visible_tablet_count": True,
+        "confidence": 0.99,
+        "uncertain": False,
+    })}}]}
+    response = Mock()
+    response.__enter__ = Mock(return_value=response)
+    response.__exit__ = Mock(return_value=False)
+    response.read.return_value = json.dumps(payload).encode("utf-8")
+    monkeypatch.setattr(blister_counting.urllib.request, "urlopen", Mock(return_value=response))
+
+    with pytest.raises(ApiError) as error:
+        blister_counting.count_blister_tablets(str(image), "image/jpeg")
+
+    assert error.value.status_code == 502
+    assert error.value.code == "vision_ai_invalid_response"
+
+
+def test_count_blister_rejects_out_of_range_confidence(monkeypatch, tmp_path):
+    image = tmp_path / "blister.jpg"
+    image.write_bytes(b"test-image")
+    monkeypatch.setattr(blister_counting, "get_settings", lambda: _settings())
+
+    payload = {"choices": [{"message": {"content": json.dumps({
+        "visible_tablet_count": 6,
+        "confidence": 1.2,
+        "uncertain": False,
+    })}}]}
+    response = Mock()
+    response.__enter__ = Mock(return_value=response)
+    response.__exit__ = Mock(return_value=False)
+    response.read.return_value = json.dumps(payload).encode("utf-8")
+    monkeypatch.setattr(blister_counting.urllib.request, "urlopen", Mock(return_value=response))
+
+    with pytest.raises(ApiError) as error:
+        blister_counting.count_blister_tablets(str(image), "image/jpeg")
+
+    assert error.value.status_code == 502
+    assert error.value.code == "vision_ai_invalid_response"
