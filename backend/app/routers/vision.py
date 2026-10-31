@@ -26,6 +26,7 @@ from app.schemas.vision import (
     VisionTextScanIn,
 )
 from app.services.ocr import OcrEngine, TesseractEngine
+from app.services.blister_counting import count_blister_tablets
 from app.services.vision import confirm_capture, create_capture, match_candidates
 
 router = APIRouter(prefix="/api/vision", tags=["vision"])
@@ -154,6 +155,43 @@ async def upload_capture(
     db.commit()
     return _out(capture, engine_available=engine.is_available())
 
+
+
+@router.post("/captures/{capture_id}/count-blister")
+def count_blister(
+    capture_id: str,
+    db: DbSession = Depends(get_db),
+    user: User = Depends(require_permission("count:perform")),
+):
+    """Analyze a pending blister image and propose a visible tablet count.
+
+    This endpoint never writes inventory. The capture owner must review and
+    explicitly accept the result in the counting workflow.
+    """
+    _ensure_schema(db)
+    capture = _get_capture_or_404(db, capture_id)
+    if capture.user_id != user.id:
+        raise ApiError(403, "Only the user who created this capture can analyze it", "forbidden")
+    if capture.status != CaptureStatus.PENDING:
+        raise ApiError(409, "Only a pending capture can be analyzed", "capture_already_closed")
+    if not capture.image_path or not capture.content_type:
+        raise ApiError(410, "The captured image is no longer available", "capture_image_unavailable")
+    result = count_blister_tablets(capture.image_path, capture.content_type)
+    log_action(
+        db,
+        action="vision.blister_count_proposed",
+        entity_type="vision_capture",
+        entity_id=capture.id,
+        actor=user,
+        after={
+            "visible_tablet_count": result["visible_tablet_count"],
+            "confidence": result["confidence"],
+            "provider_model": result["provider_model"],
+            "requires_human_confirmation": True,
+        },
+    )
+    db.commit()
+    return {"capture_id": capture.id, **result}
 
 @router.get("/captures/{capture_id}", response_model=VisionCaptureOut)
 def get_capture(
