@@ -318,6 +318,31 @@ def submit_count(
     if existing is not None:
         if existing.session_id != row.id:
             raise ApiError(409, "Idempotency key was already used for another session", "idempotency_conflict")
+        # A key may only replay the exact same payload. Reusing it for a
+        # different draft must never silently return an unrelated old count.
+        requested_lines = sorted(
+            (
+                line.package_config_id,
+                line.quantity,
+                line.partial_units,
+            )
+            for line in payload.lines
+        )
+        stored_lines = sorted(
+            (
+                line.package_config_id,
+                line.quantity,
+                line.partial_units,
+            )
+            for line in existing.lines
+        )
+        if requested_lines != stored_lines:
+            raise ApiError(
+                409,
+                "This idempotency key was already used with different count lines. "
+                "Refresh the session and submit the changed count again.",
+                "idempotency_conflict",
+            )
         ev = CountEventOut.model_validate(existing)
         ev.operator_username = user.username
         ev.lines = [CountEventLineOut.model_validate(l) for l in existing.lines]
