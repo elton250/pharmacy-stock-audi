@@ -9,6 +9,7 @@ changes the inventory. The only state changes are the capture record and its
 audit trail.
 """
 from fastapi import APIRouter, Depends, File, Request, UploadFile
+from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
 
 from app.audit import log_action
@@ -218,7 +219,15 @@ def confirm(
     This records the human decision only — no stock is written.
     """
     _ensure_schema(db)
-    capture = _get_capture_or_404(db, capture_id)
+    # Serialize confirmations for this capture. Without a row lock, two
+    # concurrent requests could both observe PENDING before either commits.
+    capture = db.execute(
+        select(VisionCapture).where(VisionCapture.id == capture_id).with_for_update()
+    ).scalar_one_or_none()
+    if capture is None:
+        raise ApiError(404, "Capture not found", "not_found")
+    if capture.user_id != user.id:
+        raise ApiError(403, "Only the user who created this capture can confirm it", "forbidden")
     before = {"status": capture.status, "matched_medicine_id": capture.matched_medicine_id}
 
     updated = confirm_capture(
