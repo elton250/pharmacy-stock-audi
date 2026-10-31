@@ -318,6 +318,25 @@ def test_confirm_does_not_close_capture_when_image_deletion_fails(
     assert capture.image_path is not None
     assert stored.exists()
 
+
+def test_confirm_capture_is_restricted_to_its_creator(admin_api, engine, capture_dir):
+    from tests.conftest import create_user, login
+
+    medicine = _medicine_with_barcode(admin_api, "8901234567890")
+    capture_id = _upload(admin_api, _png_bytes()).json()["capture_id"]
+
+    create_user(admin_api, "other_counter", "otherpass123", ["stock_counter"])
+    admin_api.post("/api/auth/logout")
+    login(admin_api, "other_counter", "otherpass123")
+
+    resp = admin_api.post(
+        f"/api/vision/captures/{capture_id}/confirm",
+        json={"decision": "confirm", "medicine_id": medicine["id"]},
+    )
+    assert resp.status_code == 403
+    assert resp.json()["code"] == "forbidden"
+
+
 def test_reject_closes_the_capture_without_a_match(admin_api, engine, capture_dir):
     capture_id = _upload(admin_api, _png_bytes()).json()["capture_id"]
     resp = admin_api.post(
