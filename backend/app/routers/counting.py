@@ -328,21 +328,19 @@ def submit_count(
             item[2] or Decimal("0"),
         )
         requested_lines = sorted(
-            (
-                line.package_config_id,
-                line.quantity,
-                line.partial_units,
-            )
-            for line in payload.lines
-        , key=line_sort_key)
+            [
+                (line.package_config_id, line.quantity, line.partial_units)
+                for line in payload.lines
+            ],
+            key=line_sort_key,
+        )
         stored_lines = sorted(
-            (
-                line.package_config_id,
-                line.quantity,
-                line.partial_units,
-            )
-            for line in existing.lines
-        , key=line_sort_key)
+            [
+                (line.package_config_id, line.quantity, line.partial_units)
+                for line in existing.lines
+            ],
+            key=line_sort_key,
+        )
         if requested_lines != stored_lines:
             raise ApiError(
                 409,
