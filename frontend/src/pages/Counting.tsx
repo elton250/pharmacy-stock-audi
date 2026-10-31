@@ -82,6 +82,9 @@ export default function Counting() {
   const draftsRef = useRef<Record<number, LineDraft[]>>({})
   const linesRef = useRef<LineDraft[]>([])
   const activeIdRef = useRef<number | null>(null)
+  // Reuse the same idempotency key for retries of an identical unsaved payload.
+  // A changed draft gets a different key; a successful save clears the retry key.
+  const countRetryRef = useRef<{ fingerprint: string; key: string } | null>(null)
   useEffect(() => {
     linesRef.current = lines
   }, [lines])
@@ -282,20 +285,26 @@ export default function Counting() {
     setBusy(true)
     setError(null)
     try {
-      const payload = {
-        idempotency_key: crypto.randomUUID(),
-        lines: lines.map((l) => ({
-          package_config_id: l.package_config_id,
-          quantity: Number(l.quantity || 0),
-          partial_units:
-            l.package_config_id !== null && l.partial_units !== '' ? Number(l.partial_units) : null,
-        })),
+      const countLines = lines.map((l) => ({
+        package_config_id: l.package_config_id,
+        quantity: Number(l.quantity || 0),
+        partial_units:
+          l.package_config_id !== null && l.partial_units !== '' ? Number(l.partial_units) : null,
+      }))
+      const fingerprint = JSON.stringify({ session_id: active.id, lines: countLines })
+      if (countLines.length === 0) {
+        countLines.push({ package_config_id: null, quantity: 0, partial_units: null })
       }
-      if (payload.lines.length === 0) {
-        payload.lines = [{ package_config_id: null, quantity: 0, partial_units: null }]
+      if (!countRetryRef.current || countRetryRef.current.fingerprint !== fingerprint) {
+        countRetryRef.current = { fingerprint, key: crypto.randomUUID() }
+      }
+      const payload = {
+        idempotency_key: countRetryRef.current.key,
+        lines: countLines,
       }
       await api.post(`/api/counting/sessions/${active.id}/counts`, payload)
       show('Count saved')
+      countRetryRef.current = null
       setLines([])
       draftsRef.current[active.id] = []
       await openSession(active.id)
